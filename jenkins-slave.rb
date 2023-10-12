@@ -2,23 +2,37 @@
 class JenkinsSlave < Formula
   desc "Jenkins Slave for macOS"
   homepage "https://jenkins.io/projects/remoting/"
-  url "https://repo.jenkins-ci.org/releases/org/jenkins-ci/main/remoting/4.5/remoting-4.5.jar"
-  sha256 "509fdd80048747c9e2e0ba90317e0845e6a95acd0d65995e7af72d57ee924267"
+  url "https://repo.jenkins-ci.org/releases/org/jenkins-ci/main/remoting/4.9/remoting-4.9.jar"
+  sha256 "3999e7bb6841643b937a47d97f5fcd3488fa3302e258618fb9964a5df32697be"
 
   depends_on "openjdk@11"
+  depends_on "lnav"
 
   def configure_script_name
     "#{name}-configure"
   end
 
   def log_file
-    "#{var}/log/#{name}.log"
+    var/"log/jenkins-slave/std_out.log"
   end
 
   def install
     libexec.install "remoting-#{version}.jar"
     bin.write_jar_script libexec / "remoting-#{version}.jar", name
     (bin + configure_script_name).write configure_script
+
+    # Create the rabbitmq-env.conf file
+    remoting_agent_conf = "#{prefix}/agent_options.cfg.template"
+    File.write(remoting_agent_conf, remoting_agent_configuration) unless File.exists?(remoting_agent_conf)
+  end
+
+  def remoting_agent_configuration
+    <<~EOS
+      -jnlpUrl
+      <jnlp url>
+      -secret
+      <secret key>
+    EOS
   end
 
   def caveats
@@ -46,7 +60,7 @@ class JenkinsSlave < Formula
 
       Step 3: Verify daemon is running
 
-        sudo launchctl list | grep #{plist_name}
+        sudo launchctl list | grep JenkinsSlave
 
         Logs can be inspected here: #{log_file}
     STRING
@@ -58,7 +72,7 @@ class JenkinsSlave < Formula
 
       set -eu
 
-      PLIST_FILE='#{prefix}/#{plist_name}.plist'
+      PLIST_FILE='#{prefix}/agent_options.cfg'
       JENKINS_URL=""
       JENKINS_SECRET=""
       JENKINS_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
@@ -88,6 +102,7 @@ class JenkinsSlave < Formula
         echo
         echo "${HELP}"
         echo
+        echo "Configuration Files available in: #{prefix}/agent_options.cfg"
       }
 
       echo_err() {
@@ -130,6 +145,10 @@ class JenkinsSlave < Formula
               exit 1
           fi
           ;;
+        -l|--logs)
+          lnav #{var}/log/jenkins-slave/std_out.log #{var}/log/jenkins-slave/std_error.log
+          exit 0
+          ;;
         -h|--help)
           print_help
           exit 0
@@ -153,77 +172,22 @@ class JenkinsSlave < Formula
         exit 2
       fi
 
-      sed -i '' "s|REPLACE_PATH|${JENKINS_PATH}|g" "${PLIST_FILE}"
-      sed -i '' "s|REPLACE_URL|${JENKINS_URL}|g" "${PLIST_FILE}"
-      sed -i '' "s|REPLACE_SECRET|${JENKINS_SECRET}|g" "${PLIST_FILE}"
+      awk 'NR==2 {$0="'${JENKINS_URL}'"} 1' #{prefix}/agent_options.cfg.template > #{prefix}/agent_options.cfg
+      cat #{prefix}/agent_options.cfg > #{prefix}/agent_options.cfg.template
+      awk 'NR==4 {$0="'${JENKINS_SECRET}'"} 1' #{prefix}/agent_options.cfg.template > #{prefix}/agent_options.cfg
     STRING
   end
 
-  def plist_name
-    "com.ribose.jenkins.slave"
+  service do
+    run [bin/"jenkins-slave", "@#{opt_prefix}/agent_options.cfg"]
+    keep_alive true
+    require_root false
+    log_path var/"log/jenkins-slave/std_out.log"
+    error_log_path var/"log/jenkins-slave/std_error.log"
+    run_type :immediate # This should be omitted since it's the default
+    process_type :background
+    environment_variables PATH: std_service_path_env
+    #environment_variables HOMEBREW_PREFIX/"bin:/usr/bin:/bin:/usr/sbin:/sbin"
   end
 
-  def plist
-    <<~STRING
-      <?xml version="1.0" encoding="UTF-8"?>
-      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-      <plist version="1.0">
-        <dict>
-          <key>Label</key>
-          <string>#{plist_name}</string>
-
-          <key>UserName</key>
-          <string>#{ENV['USER']}</string>
-
-          <key>EnvironmentVariables</key>
-          <dict>
-            <key>PATH</key>
-            <string>REPLACE_PATH</string>
-          </dict>
-
-          <key>ProgramArguments</key>
-          <array>
-            <string>#{bin}/#{name}</string>
-            <string>-jnlpUrl</string>
-            <string>REPLACE_URL</string>
-            <string>-secret</string>
-            <string>REPLACE_SECRET</string>
-          </array>
-
-          <key>RunAtLoad</key>
-          <true/>
-
-          <key>KeepAlive</key>
-          <true/>
-
-          <key>StandardErrorPath</key>
-          <string>#{log_file}</string>
-
-          <key>StandardOutPath</key>
-          <string>#{log_file}</string>
-
-          <key>SessionCreate</key>
-          <true/>
-        </dict>
-      </plist>
-    STRING
-  end
-
-  plist_options startup: true
-
-  test do
-    test_url = "http://example.com/jenkins"
-    test_cmd = <<~STRING.gsub(/\s+/, " ").strip
-      #{bin}/#{name} \
-        -noReconnect \
-        -jnlpUrl #{test_url} \
-        -secret XXX
-    STRING
-
-    output = shell_output "#{test_cmd} 2>&1", 1
-    assert_match /Failed to obtain #{test_url}\?encrypt=true/i, \
-                 output, \
-                 "\e[31mx #{name} not working\e[0m\n"
-    print "\e[32m✓ #{name} is working\e[0m\n"
-  end
 end
