@@ -2,8 +2,9 @@
 class JenkinsSlave < Formula
   desc "Jenkins Slave for macOS"
   homepage "https://jenkins.io/projects/remoting/"
-  url "https://repo.jenkins-ci.org/releases/org/jenkins-ci/main/remoting/4.9/remoting-4.9.jar"
-  sha256 "3999e7bb6841643b937a47d97f5fcd3488fa3302e258618fb9964a5df32697be"
+
+  url "https://repo.jenkins-ci.org/artifactory/releases/org/jenkins-ci/main/remoting/3044.vb_940a_a_e4f72e/remoting-3044.vb_940a_a_e4f72e.jar"
+  sha256 "2066d2c91d2be5dbe5a191b0d48cbb04e9a5be2b2294b726ee723f0015cdd2e1"
 
   depends_on "openjdk@11"
   depends_on "lnav"
@@ -18,7 +19,9 @@ class JenkinsSlave < Formula
 
   def install
     libexec.install "remoting-#{version}.jar"
-    bin.write_jar_script libexec / "remoting-#{version}.jar", name
+    libexec.install_symlink "remoting-#{version}.jar" => "remoting.jar"
+
+    bin.write_jar_script libexec / "remoting.jar", name
     (bin + configure_script_name).write configure_script
 
     # Create the rabbitmq-env.conf file
@@ -136,14 +139,19 @@ class JenkinsSlave < Formula
           fi
           ;;
         -p|--path)
+
+          ;;
+        -d|--download)
           if [ -n "${2}" ] && [ "${2:0:1}" != "-" ]; then
-              JENKINS_PATH="${2}"
-              shift 2
+            set +o noclobber
+            curl "$2/jnlpJars/agent.jar" > #{prefix}/libexec/agent.jar
+            ln -sf #{prefix}/libexec/agent.jar #{prefix}/libexec/remoting.jar
           else
-              error "Argument for ${1} is missing"
+              error "Jenkins URL for ${1} is missing"
               echo_err "${USAGE}"
               exit 1
           fi
+          exit 0
           ;;
         -l|--logs)
           lnav #{var}/log/jenkins-slave/std_out.log #{var}/log/jenkins-slave/std_error.log
@@ -189,5 +197,7 @@ class JenkinsSlave < Formula
     environment_variables PATH: std_service_path_env
     #environment_variables HOMEBREW_PREFIX/"bin:/usr/bin:/bin:/usr/sbin:/sbin"
   end
+  ## IF needed https://stackoverflow.com/questions/135688/setting-environment-variables-on-os-x/3756686#3756686
+  ## launchctl setenv PATH $PATH before starting service
 
 end
